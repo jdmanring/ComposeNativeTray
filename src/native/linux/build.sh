@@ -30,14 +30,22 @@ echo "Using JAVA_HOME: $JAVA_HOME"
 JNI_INCLUDE="$JAVA_HOME/include"
 JNI_INCLUDE_LINUX="$JAVA_HOME/include/linux"
 
-# Verify sd-bus is available
-if ! pkg-config --exists libsystemd 2>/dev/null; then
-    echo "ERROR: libsystemd-dev not found. Install it: sudo apt install libsystemd-dev"
+# sd-bus HEADERS only. The library is dlopen'd at runtime (see sdbus_compat.c),
+# so a single build works on systemd and systemd-free distros alike and we never
+# link -lsystemd. Any provider's headers are fine: libsystemd, or elogind / basu.
+SDBUS_CFLAGS=""
+for pkg in libsystemd libelogind basu; do
+    if pkg-config --exists "$pkg" 2>/dev/null; then
+        SDBUS_CFLAGS=$(pkg-config --cflags "$pkg")
+        echo "Using sd-bus headers from: $pkg"
+        break
+    fi
+done
+if [ -z "$SDBUS_CFLAGS" ] && ! echo '#include <systemd/sd-bus.h>' | gcc -E - >/dev/null 2>&1; then
+    echo "ERROR: sd-bus headers not found. Install libsystemd-dev, or"
+    echo "       libelogind-dev / basu on systemd-free distros."
     exit 1
 fi
-
-SDBUS_CFLAGS=$(pkg-config --cflags libsystemd)
-SDBUS_LIBS=$(pkg-config --libs libsystemd)
 
 # Detect host architecture
 UNAME_ARCH="$(uname -m)"
@@ -59,6 +67,14 @@ gcc -c -o "$SCRIPT_DIR/sni.o" \
     $SDBUS_CFLAGS \
     "$SCRIPT_DIR/sni.c"
 
+# Compile sdbus_compat.c (runtime sd-bus loader)
+echo "Compiling sdbus_compat.c..."
+gcc -c -o "$SCRIPT_DIR/sdbus_compat.o" \
+    -fPIC -O2 -Wall -Wextra -Wno-unused-parameter \
+    -I "$SCRIPT_DIR" \
+    $SDBUS_CFLAGS \
+    "$SCRIPT_DIR/sdbus_compat.c"
+
 # Compile jni_bridge.c
 echo "Compiling jni_bridge.c..."
 gcc -c -o "$SCRIPT_DIR/jni_bridge.o" \
@@ -72,15 +88,15 @@ gcc -c -o "$SCRIPT_DIR/jni_bridge.o" \
 echo "Linking libLinuxTray.so..."
 gcc -shared -o "$OUTPUT_DIR/$PLATFORM_DIR/libLinuxTray.so" \
     "$SCRIPT_DIR/sni.o" \
+    "$SCRIPT_DIR/sdbus_compat.o" \
     "$SCRIPT_DIR/jni_bridge.o" \
-    $SDBUS_LIBS \
     -lpthread -lm -ldl
 
 # Strip debug symbols for smaller binary
 strip --strip-unneeded "$OUTPUT_DIR/$PLATFORM_DIR/libLinuxTray.so"
 
 # Clean up object files
-rm -f "$SCRIPT_DIR/sni.o" "$SCRIPT_DIR/jni_bridge.o"
+rm -f "$SCRIPT_DIR/sni.o" "$SCRIPT_DIR/sdbus_compat.o" "$SCRIPT_DIR/jni_bridge.o"
 
 # Invalidate runtime cache (NativeLibraryLoader validates by size only,
 # so a same-size rebuild would serve the stale cached copy)

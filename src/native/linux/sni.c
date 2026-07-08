@@ -18,6 +18,7 @@
 
 #include <time.h>
 #include <systemd/sd-bus.h>
+#include "sdbus_compat.h"
 
 /* stb_image for PNG/JPG decoding */
 #define STB_IMAGE_IMPLEMENTATION
@@ -1097,6 +1098,14 @@ sni_tray *sni_tray_create(const uint8_t *icon_data, size_t icon_len,
 
 int sni_tray_run(sni_tray *tray) {
     int r;
+
+    /* Resolve the sd-bus API at runtime so one prebuilt library works on both
+     * systemd and systemd-free systems (elogind/basu). See sdbus_compat.h. */
+    if (sdbus_compat_init() < 0) {
+        fprintf(stderr, "sni: no sd-bus provider found "
+                        "(tried libsystemd/libelogind/libbasu); tray disabled\n");
+        return -1;
+    }
 
     /* Hold bus_lock across the whole setup: the moment tray->bus becomes
      * non-NULL a foreign thread may try to emit, and the bus is not yet ready. */
