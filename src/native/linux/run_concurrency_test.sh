@@ -5,15 +5,22 @@
 
 set -u
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SDBUS_CFLAGS=$(pkg-config --cflags libsystemd)
-SDBUS_LIBS=$(pkg-config --libs libsystemd)
+# sd-bus headers from any provider; the library is dlopen'd at runtime
+# (sdbus_compat.c), so we never link -lsystemd. -ldl for the loader.
+SDBUS_CFLAGS=""
+for pkg in libsystemd libelogind basu; do
+    if pkg-config --exists "$pkg" 2>/dev/null; then
+        SDBUS_CFLAGS=$(pkg-config --cflags "$pkg")
+        break
+    fi
+done
 BIN="$SCRIPT_DIR/test_sni_concurrency"
 
 echo "Compiling concurrency test..."
 gcc -O2 -g -fPIC -Wall -Wextra -Wno-unused-parameter \
     -I "$SCRIPT_DIR" $SDBUS_CFLAGS \
-    "$SCRIPT_DIR/sni.c" "$SCRIPT_DIR/test_sni_concurrency.c" \
-    $SDBUS_LIBS -lpthread -lm -o "$BIN" || { echo "compile failed"; exit 2; }
+    "$SCRIPT_DIR/sni.c" "$SCRIPT_DIR/sdbus_compat.c" "$SCRIPT_DIR/test_sni_concurrency.c" \
+    -lpthread -lm -ldl -o "$BIN" || { echo "compile failed"; exit 2; }
 
 RUNS="${1:-5}"
 rc=0
